@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import asyncio
 import requests
 from bs4 import BeautifulSoup
@@ -71,30 +72,40 @@ def run_flask():
 Thread(target=run_flask, daemon=True).start()
 
 # --- SONICPESA PAYMENT REQUEST ---
-def request_sonicpesa_payment(phone_number, amount):
+def request_sonicpesa_payment(phone_number, amount, user_id):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     
-    # Inasoma key, inabadilisha 'Sk_' kuwa 'sk_', na kuondoa nafasi
+    # Inasoma key kutoka Render; isipokuwepo inachukua Key yako ya Live moja kwa moja
     raw_key = os.getenv("SONICPESA_API_KEY", "").strip()
+    if not raw_key:
+        raw_key = "sk_live_yHhlER9dXRIPCaJRUNhZ7OI9C0iCs3uTDKPX4p6w"
+        
     api_key = "sk_" + raw_key[3:] if raw_key.startswith("Sk_") else raw_key
 
     # Format ya namba iwe 255...
-    clean_phone = re.sub(r'\D', '', phone_number)
+    clean_phone = re.sub(r'\D', '', str(phone_number))
     if clean_phone.startswith("0"):
         clean_phone = "255" + clean_phone[1:]
     elif not clean_phone.startswith("255"):
         clean_phone = "255" + clean_phone
 
-    # Tumeondoa Authorization Bearer na kutumia x-api-key
+    # Kutengeneza Reference ya kipekee ili kuzuia Server Error (500)
+    ref_id = f"KADO{user_id}{int(time.time())}"
+
     headers = {
+        "Authorization": f"Bearer {api_key}",
         "x-api-key": api_key,
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
+    
     payload = {
         "api_key": api_key,
         "phone": clean_phone,
-        "amount": int(amount)
+        "amount": int(amount),
+        "reference": ref_id,
+        "description": "Malipo ya Kadomovie",
+        "currency": "TZS"
     }
     
     try:
@@ -103,7 +114,10 @@ def request_sonicpesa_payment(phone_number, amount):
         print(f"📌 SonicPesa Response: {response.text}")
 
         if response.status_code in [200, 201]:
-            return response.json()
+            res_data = response.json()
+            if isinstance(res_data, dict):
+                res_data["custom_ref"] = ref_id
+            return res_data
         else:
             return {
                 "status": "error",
@@ -154,11 +168,11 @@ async def lipa_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo kwenda `0{phone[3:]}`...", parse_mode="Markdown")
 
     try:
-        res = await asyncio.to_thread(request_sonicpesa_payment, phone, 1000)
+        res = await asyncio.to_thread(request_sonicpesa_payment, phone, 1000, user_id)
 
-        if res.get("status") in ["success", True, 200]:
-            data_obj = res.get("data", {})
-            reference = str(data_obj.get("reference") or data_obj.get("order_id") or user_id)
+        if res.get("status") in ["success", True, 200] or "order_id" in str(res):
+            data_obj = res.get("data", {}) if isinstance(res.get("data"), dict) else {}
+            reference = str(data_obj.get("reference") or res.get("custom_ref") or user_id)
             
             PAYMENTS_DB[reference] = str(user_id)
             await msg.edit_text("📱 **Popup imetumwa kwenye simu yako!**\nIngiza **PIN** yako kukamilisha muamala.")
@@ -301,4 +315,3 @@ if __name__ == '__main__':
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     app_bot.run_polling()
-
