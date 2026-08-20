@@ -17,7 +17,6 @@ from telegram.ext import (
 # --- CONFIGURATION ---
 ADMIN_ID = os.getenv("ADMIN_ID", "1846737920")
 TOKEN = os.getenv("BOT_TOKEN", "8641125457:AAGem16-Y8ekNisn8ZRtzIfHcrW7tMJzyj0")
-SONICPESA_API_KEY = os.getenv("SONICPESA_API_KEY", "")
 
 # Memory Storage
 PAYMENTS_DB = {}   # reference -> user_id
@@ -74,12 +73,21 @@ Thread(target=run_flask, daemon=True).start()
 # --- SONICPESA PAYMENT REQUEST ---
 def request_sonicpesa_payment(phone_number, amount):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
+    
+    # Inasoma key, inabadilisha 'Sk_' kuwa 'sk_', na kuondoa nafasi (space) zote
+    raw_key = os.getenv("SONICPESA_API_KEY", "").strip()
+    if raw_key.startswith("Sk_"):
+        api_key = "sk_" + raw_key[3:]
+    else:
+        api_key = raw_key
+
     headers = {
-        "Authorization": f"Bearer {SONICPESA_API_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
     }
     payload = {
-        "api_key": SONICPESA_API_KEY,
+        "api_key": api_key,
         "phone": phone_number,
         "amount": int(amount)
     }
@@ -139,18 +147,21 @@ async def lipa_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo kwenda `{phone}`...", parse_mode="Markdown")
 
-    res = request_sonicpesa_payment(phone, 1000)
+    try:
+        # Tunatumia asyncio.to_thread ili kuzuia bot kukwama kwenye network request
+        res = await asyncio.to_thread(request_sonicpesa_payment, phone, 1000)
 
-    # Inasoma majibu ya SonicPesa
-    if res.get("status") in ["success", True, 200]:
-        data_obj = res.get("data", {})
-        reference = str(data_obj.get("reference") or data_obj.get("order_id") or user_id)
-        
-        PAYMENTS_DB[reference] = str(user_id)
-        await msg.edit_text("📱 **Popup imetumwa kwenye simu yako!**\nIngiza **PIN** yako kukamilisha muamala.")
-    else:
-        err_msg = res.get("message") or "Imeshindikana kutuma ombi la malipo."
-        await msg.edit_text(f"❌ **Hitilafu:** {err_msg}")
+        if res.get("status") in ["success", True, 200]:
+            data_obj = res.get("data", {})
+            reference = str(data_obj.get("reference") or data_obj.get("order_id") or user_id)
+            
+            PAYMENTS_DB[reference] = str(user_id)
+            await msg.edit_text("📱 **Popup imetumwa kwenye simu yako!**\nIngiza **PIN** yako kukamilisha muamala.")
+        else:
+            err_msg = res.get("message") or "Imeshindikana kutuma ombi la malipo."
+            await msg.edit_text(f"❌ **Hitilafu:** {err_msg}")
+    except Exception as e:
+        await msg.edit_text(f"❌ **Kosa la Mfumo:** {str(e)}")
 
 # --- ADMIN COMMANDS ---
 
