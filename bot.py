@@ -4,9 +4,9 @@ from bs4 import BeautifulSoup
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# Server ya kuizuia Render isifunge bot
+# Health check kwa Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -22,12 +22,9 @@ Thread(target=run_health_check, daemon=True).start()
 TOKEN = os.getenv("BOT_TOKEN", "8641125457:AAGem16-Y8ekNisn8ZRtzIfHcrW7tMJzyj0")
 
 async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.message.text.replace("/movie", "").strip()
-    if not query:
-        await update.message.reply_text("Andika jina la muvi/DJ.")
-        return
-
-    msg = await update.message.reply_text("🔍 Inatafuta...")
+    query = update.message.text.strip()
+    msg = await update.message.reply_text(f"🔍 Inatafuta chochote chenye '{query}'...")
+    
     search_url = f"https://www.absalomfamily.com/?s={query}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
@@ -35,18 +32,36 @@ async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = requests.get(search_url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Inatafuta links zote za Google Drive
-        links = soup.find_all('a', href=lambda href: href and 'drive.google.com' in href)
+        # Tunatafuta matokeo yote ya 'h2' ambayo mara nyingi yana vichwa vya muvi
+        results = soup.find_all('h2')
         
-        if links:
-            reply = f"🎬 **Matokeo ya '{query}':**\n\n"
-            for link in links[:5]: # Inaonyesha link 5 za kwanza
-                reply += f"👉 {link['href']}\n"
+        # Tunachuja ili kuondoa vichwa visivyo vya muvi (kama 'Search')
+        found_items = []
+        for res in results:
+            text = res.get_text().strip()
+            if text and len(text) > 5:
+                found_items.append(text)
+        
+        if found_items:
+            reply = f"✅ Nimepata matokeo haya kwa '{query}':\n\n"
+            for item in found_items[:10]: # Inaonyesha 10 ya kwanza
+                reply += f"👉 {item}\n"
             await msg.edit_text(reply)
         else:
-            # DEBUGGING: Hapa tutaona nini kipo kwenye ukurasa kwenye logs za Render
-            print(f"DEBUG: Hakuna link iliyopatikana. Preview: {response.text[:500]}")
-            await msg.edit_text("❌ Sijapata link za Google Drive. Inawezekana hazipo kwenye ukurasa huu wa utafutaji.")
+            # Kama haijapata kwa h2, jaribu kutafuta link zote za kawaida
+            links = soup.find_all('a')
+            found_links = []
+            for a in links:
+                if query.lower() in a.get_text().lower() and len(a.get_text()) > 5:
+                    found_links.append(a.get_text().strip())
+            
+            if found_links:
+                reply = f"✅ Nimepata link hizi zenye '{query}':\n\n"
+                for item in set(found_links[:10]):
+                    reply += f"👉 {item}\n"
+                await msg.edit_text(reply)
+            else:
+                await msg.edit_text(f"❌ Samahani, bot haijaona chochote chenye jina '{query}' kwenye hiyo website. Inawezekana website ina ulinzi.")
             
     except Exception as e:
         await msg.edit_text(f"⚠️ Hitilafu: {str(e)}")
