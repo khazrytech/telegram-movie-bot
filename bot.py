@@ -75,7 +75,7 @@ Thread(target=run_flask, daemon=True).start()
 def request_sonicpesa_payment(phone_number, amount, user_id):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     
-    # Inasoma key kutoka Render; isipokuwepo inachukua Key yako ya Live
+    # Inasoma Key kutoka Render
     raw_key = os.getenv("SONICPESA_API_KEY", "").strip()
     if not raw_key:
         raw_key = "sk_live_yHhlER9dXRIPCaJRUNhZ7OI9C0iCs3uTDKPX4p6w"
@@ -91,9 +91,9 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
 
     ref_id = f"KADO{user_id}{int(time.time())}"
 
-    # HEADER BILA AUTHORIZATION BEARER (Kuzuia Error 401)
+    # Header rasmi inayokubaliwa na SonicPesa
     headers = {
-        "x-api-key": api_key,
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
@@ -117,10 +117,15 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
             if isinstance(res_data, dict):
                 res_data["custom_ref"] = ref_id
             return res_data
+        elif response.status_code == 401:
+            return {
+                "status": "error",
+                "message": "API Key ya SonicPesa sio sahihi. Tafadhali hakiki SONICPESA_API_KEY kwenye Render."
+            }
         else:
             return {
                 "status": "error",
-                "message": f"Server Error ({response.status_code}): {response.text}"
+                "message": f"SonicPesa Server Error ({response.status_code}): Hakikisha akiba ya akaunti yako ya SonicPesa au hakiki API key."
             }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -314,4 +319,3 @@ if __name__ == '__main__':
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     app_bot.run_polling()
-
