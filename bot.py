@@ -19,11 +19,9 @@ from telegram.ext import (
 ADMIN_ID = os.getenv("ADMIN_ID", "1846737920")
 TOKEN = os.getenv("BOT_TOKEN", "8641125457:AAGem16-Y8ekNisn8ZRtzIfHcrW7tMJzyj0")
 
-# Memory Storage
-PAYMENTS_DB = {}   # reference -> user_id
-USER_IDS = set()   # Orodha ya watumiaji kwa ajili ya broadcast
+PAYMENTS_DB = {}   
+USER_IDS = set()   
 
-# --- FLASK SERVER (WEBHOOK & HEALTH CHECK) ---
 app = Flask(__name__)
 
 @app.route('/sonicpesa-webhook', methods=['POST'])
@@ -40,7 +38,6 @@ def sonicpesa_webhook():
         user_id = PAYMENTS_DB.get(reference, ADMIN_ID)
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-        # 1. Ujumbe kwa Mtumiaji
         if str(user_id) != str(ADMIN_ID):
             user_msg = (
                 f"🎉 **MALIPO YAMEPOKELEWA!**\n\n"
@@ -50,7 +47,6 @@ def sonicpesa_webhook():
             )
             requests.post(url, json={"chat_id": user_id, "text": user_msg, "parse_mode": "Markdown"})
 
-        # 2. Ujumbe kwa Admin
         admin_msg = (
             f"✅ **MALIPO MPYA YAMEKAMILIKA!**\n\n"
             f"👤 **User ID:** `{user_id}`\n"
@@ -75,14 +71,16 @@ Thread(target=run_flask, daemon=True).start()
 def request_sonicpesa_payment(phone_number, amount, user_id):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     
-    # Inasoma Key kutoka Render
-    raw_key = os.getenv("SONICPESA_API_KEY", "").strip()
-    if not raw_key:
-        raw_key = "sk_live_yHhlER9dXRIPCaJRUNhZ7OI9C0iCs3uTDKPX4p6w"
-        
-    api_key = "sk_" + raw_key[3:] if raw_key.startswith("Sk_") else raw_key
+    # Soma API Key moja kwa moja kutoka Render
+    api_key = os.getenv("SONICPESA_API_KEY", "").strip()
+    
+    if not api_key:
+        return {
+            "status": "error",
+            "message": "API Key haijapatikana kwenye Render! Hakikisha umebofya 'Save, rebuild, and deploy' kwenye Render."
+        }
 
-    # Format ya namba iwe 255...
+    # Format ya namba 255...
     clean_phone = re.sub(r'\D', '', str(phone_number))
     if clean_phone.startswith("0"):
         clean_phone = "255" + clean_phone[1:]
@@ -91,9 +89,9 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
 
     ref_id = f"KADO{user_id}{int(time.time())}"
 
-    # Header rasmi inayokubaliwa na SonicPesa
     headers = {
         "Authorization": f"Bearer {api_key}",
+        "X-API-KEY": api_key,
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
@@ -108,27 +106,22 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-        print(f"📌 SonicPesa Status: {response.status_code}")
-        print(f"📌 SonicPesa Response: {response.text}")
+        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        print(f"📌 SonicPesa Response Code: {response.status_code}")
+        print(f"📌 SonicPesa Response Text: {response.text}")
 
         if response.status_code in [200, 201]:
             res_data = response.json()
             if isinstance(res_data, dict):
                 res_data["custom_ref"] = ref_id
             return res_data
-        elif response.status_code == 401:
-            return {
-                "status": "error",
-                "message": "API Key ya SonicPesa sio sahihi. Tafadhali hakiki SONICPESA_API_KEY kwenye Render."
-            }
         else:
             return {
                 "status": "error",
-                "message": f"SonicPesa Server Error ({response.status_code}): Hakikisha akiba ya akaunti yako ya SonicPesa au hakiki API key."
+                "message": f"Hitilafu kutoka SonicPesa ({response.status_code}): {response.text}"
             }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Network error: {str(e)}"}
 
 # --- TELEGRAM BOT COMMANDS ---
 
@@ -308,7 +301,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             continue
 
-# --- START BOT ---
 if __name__ == '__main__':
     app_bot = ApplicationBuilder().token(TOKEN).build()
     
