@@ -31,7 +31,7 @@ def sonicpesa_webhook():
     data = request.json or {}
     print(f"📌 Webhook Received: {data}")
 
-    reference = str(data.get("reference") or data.get("trans_id") or "")
+    reference = str(data.get("reference") or data.get("trans_id") or data.get("order_id") or "")
     status = str(data.get("status", "")).upper()
     amount = data.get("amount", 1000)
     phone = data.get("phone") or data.get("accountnumber") or "N/A"
@@ -73,7 +73,7 @@ Thread(target=run_flask, daemon=True).start()
 
 # --- SONICPESA PAYMENT REQUEST ---
 def request_sonicpesa_payment(phone_number, amount):
-    url = "https://sonicpesa.com/api/v1/checkout"
+    url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     headers = {
         "Authorization": f"Bearer {SONICPESA_API_KEY}",
         "Content-Type": "application/json"
@@ -86,18 +86,18 @@ def request_sonicpesa_payment(phone_number, amount):
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=15)
-        print(f"📌 SonicPesa Status Code: {response.status_code}")
+        print(f"📌 SonicPesa Status: {response.status_code}")
         print(f"📌 SonicPesa Response: {response.text}")
 
-        if "application/json" in response.headers.get("Content-Type", ""):
+        if response.status_code in [200, 201]:
             return response.json()
         else:
             return {
-                "success": False, 
-                "error": f"API Error ({response.status_code}): Hakikisha SONICPESA_API_KEY iko sahihi kwenye Render."
+                "status": "error",
+                "message": f"Server Error ({response.status_code}): {response.text}"
             }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"status": "error", "message": str(e)}
 
 # --- TELEGRAM BOT COMMANDS ---
 
@@ -141,12 +141,15 @@ async def lipa_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     res = request_sonicpesa_payment(phone, 1000)
 
-    if res.get("status") in [True, "success", "PENDING", 200]:
-        reference = str(res.get("reference") or res.get("trans_id") or user_id)
+    # Inasoma majibu ya SonicPesa
+    if res.get("status") in ["success", True, 200]:
+        data_obj = res.get("data", {})
+        reference = str(data_obj.get("reference") or data_obj.get("order_id") or user_id)
+        
         PAYMENTS_DB[reference] = str(user_id)
         await msg.edit_text("📱 **Popup imetumwa kwenye simu yako!**\nIngiza **PIN** yako kukamilisha muamala.")
     else:
-        err_msg = res.get("message") or res.get("error") or "Imeshindikana kutuma ombi la malipo."
+        err_msg = res.get("message") or "Imeshindikana kutuma ombi la malipo."
         await msg.edit_text(f"❌ **Hitilafu:** {err_msg}")
 
 # --- ADMIN COMMANDS ---
