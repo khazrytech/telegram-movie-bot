@@ -1,9 +1,30 @@
 import os
 import re
 import requests
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
+# Server ndogo ya kuijibu Render ili isifunge bot (Port Health Check)
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot ipo hai!")
+
+    def log_message(self, format, *args):
+        return  # Zuia spam kwenye logs
+
+def run_health_check():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+# Anzisha server ya port kwenye background
+Thread(target=run_health_check, daemon=True).start()
+
+# Mipangilio ya Telegram Bot
 TOKEN = os.getenv("BOT_TOKEN", "8641125457:AAGem16-Y8ekNisn8ZRtzIfHcrW7tMJzyj0")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,6 +56,5 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("movie", search_movie))
-    print("Bot ipo hewani kwenye Server...")
+    print("Bot na Web Server zipo hewani...")
     app.run_polling(drop_pending_updates=True)
-
