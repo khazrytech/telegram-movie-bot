@@ -19,9 +19,10 @@ from telegram.ext import (
 ADMIN_ID = os.getenv("ADMIN_ID", "1846737920")
 TOKEN = os.getenv("BOT_TOKEN", "8641125457:AAGem16-Y8ekNisn8ZRtzIfHcrW7tMJzyj0")
 
-PAYMENTS_DB = {}   
-USER_IDS = set()   
+PAYMENTS_DB = {}   # reference -> user_id
+USER_IDS = set()   # Orodha ya watumiaji kwa ajili ya broadcast
 
+# --- FLASK SERVER (WEBHOOK & HEALTH CHECK) ---
 app = Flask(__name__)
 
 @app.route('/sonicpesa-webhook', methods=['POST'])
@@ -38,6 +39,7 @@ def sonicpesa_webhook():
         user_id = PAYMENTS_DB.get(reference, ADMIN_ID)
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
+        # 1. Ujumbe kwa Mtumiaji
         if str(user_id) != str(ADMIN_ID):
             user_msg = (
                 f"🎉 **MALIPO YAMEPOKELEWA!**\n\n"
@@ -47,6 +49,7 @@ def sonicpesa_webhook():
             )
             requests.post(url, json={"chat_id": user_id, "text": user_msg, "parse_mode": "Markdown"})
 
+        # 2. Ujumbe kwa Admin
         admin_msg = (
             f"✅ **MALIPO MPYA YAMEKAMILIKA!**\n\n"
             f"👤 **User ID:** `{user_id}`\n"
@@ -71,13 +74,13 @@ Thread(target=run_flask, daemon=True).start()
 def request_sonicpesa_payment(phone_number, amount, user_id):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     
-    # Soma API Key moja kwa moja kutoka Render
-    api_key = os.getenv("SONICPESA_API_KEY", "").strip()
+    # Soma na usafishe API Key kuondoa spaces au alama za nukuu
+    raw_key = os.getenv("SONICPESA_API_KEY", "").strip().strip('"').strip("'")
     
-    if not api_key:
+    if not raw_key:
         return {
             "status": "error",
-            "message": "API Key haijapatikana kwenye Render! Hakikisha umebofya 'Save, rebuild, and deploy' kwenye Render."
+            "message": "API Key haijapatikana! Hakikisha umeongeza Variable ya SONICPESA_API_KEY kwenye Render na ku-deploy."
         }
 
     # Format ya namba 255...
@@ -90,14 +93,14 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
     ref_id = f"KADO{user_id}{int(time.time())}"
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
-        "X-API-KEY": api_key,
+        "Authorization": f"Bearer {raw_key}",
+        "X-API-KEY": raw_key,
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
     
     payload = {
-        "api_key": api_key,
+        "api_key": raw_key,
         "phone": clean_phone,
         "amount": int(amount),
         "reference": ref_id,
@@ -107,7 +110,7 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=20)
-        print(f"📌 SonicPesa Response Code: {response.status_code}")
+        print(f"📌 SonicPesa Status Code: {response.status_code}")
         print(f"📌 SonicPesa Response Text: {response.text}")
 
         if response.status_code in [200, 201]:
@@ -301,6 +304,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             continue
 
+# --- START BOT ---
 if __name__ == '__main__':
     app_bot = ApplicationBuilder().token(TOKEN).build()
     
