@@ -74,20 +74,28 @@ Thread(target=run_flask, daemon=True).start()
 def request_sonicpesa_payment(phone_number, amount):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     
-    # Inasoma key, inabadilisha 'Sk_' kuwa 'sk_', na kuondoa nafasi (space) zote
+    # Inasoma key, inabadilisha 'Sk_' kuwa 'sk_', na kuondoa nafasi
     raw_key = os.getenv("SONICPESA_API_KEY", "").strip()
     api_key = "sk_" + raw_key[3:] if raw_key.startswith("Sk_") else raw_key
 
-    # Tumeondoa 'Authorization: Bearer' na kutumia 'x-api-key' badala yake
+    # Badilisha namba kuwa format ya 255... kwa ajili ya M-Pesa / TigoPesa
+    clean_phone = re.sub(r'\D', '', phone_number)
+    if clean_phone.startswith("0"):
+        clean_phone = "255" + clean_phone[1:]
+    elif not clean_phone.startswith("255"):
+        clean_phone = "255" + clean_phone
+
     headers = {
-        "x-api-key": api_key,
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
     payload = {
         "api_key": api_key,
-        "phone": phone_number,
-        "amount": int(amount)
+        "phone": clean_phone,
+        "msisdn": clean_phone,
+        "amount": int(amount),
+        "currency": "TZS"
     }
     
     try:
@@ -132,21 +140,21 @@ async def lipa_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Inasafisha namba na kuondoa nafasi au alama zozote zisizo namba
     raw_phone = "".join(args)
     phone = re.sub(r'\D', '', raw_phone)
 
-    if phone.startswith("255"):
-        phone = "0" + phone[3:]
+    if phone.startswith("0"):
+        phone = "255" + phone[1:]
+    elif not phone.startswith("255"):
+        phone = "255" + phone
 
-    if len(phone) != 10:
-        await update.message.reply_text("❌ Namba sio sahihi. Hakikisha ina tarakimu 10 (Mfano: `/lipa 0747431855`).", parse_mode="Markdown")
+    if len(phone) != 12:
+        await update.message.reply_text("❌ Namba sio sahihi. Hakikisha ina tarakimu sahihi (Mfano: `/lipa 0747431855`).", parse_mode="Markdown")
         return
 
-    msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo kwenda `{phone}`...", parse_mode="Markdown")
+    msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo kwenda `0{phone[3:]}`...", parse_mode="Markdown")
 
     try:
-        # Tunatumia asyncio.to_thread ili kuzuia bot kukwama kwenye network request
         res = await asyncio.to_thread(request_sonicpesa_payment, phone, 1000)
 
         if res.get("status") in ["success", True, 200]:
@@ -213,7 +221,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USER_IDS.add(user.id)
     query = update.message.text.strip()
     
-    # Mtaarifu Admin wakati mtumiaji anatafuta
     if str(user.id) != str(ADMIN_ID):
         try:
             admin_msg = f"🔔 **Mtumiaji:** {user.first_name} (`{user.id}`)\n🔍 **Ametafuta:** `{query}`"
@@ -262,8 +269,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             p_res = requests.get(item['url'], headers=headers, timeout=12)
             p_soup = BeautifulSoup(p_res.text, 'html.parser')
 
-            drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', p_res.text)
-            drive_text = drive_links[0].rstrip('.,;') if drive_links else "⚠️ Link haijapatikana kwasasa"
+            # Usafishaji makini wa Google Drive links ili kuzuia link zilizoharibika
+            raw_drive_links = re.findall(r'https://drive\.google\.com/file/d/[a-zA-Z0-9_-]+', p_res.text)
+            if raw_drive_links:
+                drive_text = f"{raw_drive_links[0]}/view?usp=drivesdk"
+            else:
+                drive_text = "⚠️ Link haijapatikana au imefutwa kwasasa"
 
             poster_url = None
             og_image = p_soup.find('meta', property='og:image')
