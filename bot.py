@@ -14,21 +14,20 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- MISINGI NA CONFIGURATION ---
+# --- CONFIGURATION ---
 ADMIN_ID = os.getenv("ADMIN_ID", "1846737920")
 TOKEN = os.getenv("BOT_TOKEN", "8641125457:AAGem16-Y8ekNisn8ZRtzIfHcrW7tMJzyj0")
 SONICPESA_API_KEY = os.getenv("SONICPESA_API_KEY", "")
 
-# Kuhifadhi Data Kwenye Memory
+# Memory Storage
 PAYMENTS_DB = {}   # reference -> user_id
-USER_IDS = set()   # Orodha ya user_id zote zilizoingia kwenye bot (kwa ajili ya broadcast)
+USER_IDS = set()   # Orodha ya watumiaji kwa ajili ya broadcast
 
-# --- FLASK SERVER (WEBHOOK NA HEALTH CHECK) ---
+# --- FLASK SERVER (WEBHOOK & HEALTH CHECK) ---
 app = Flask(__name__)
 
 @app.route('/sonicpesa-webhook', methods=['POST'])
 def sonicpesa_webhook():
-    """Inapokea majibu ya malipo kutoka SonicPesa na kumtumia SMS mtumiaji + Admin"""
     data = request.json or {}
     print(f"📌 Webhook Received: {data}")
 
@@ -37,13 +36,12 @@ def sonicpesa_webhook():
     amount = data.get("amount", 1000)
     phone = data.get("phone") or data.get("accountnumber") or "N/A"
 
-    # Angalia kama muamala umefanikiwa
     if status in ["SUCCESS", "SUCCESSFUL", "COMPLETED", "200", "PAID"]:
         user_id = PAYMENTS_DB.get(reference, ADMIN_ID)
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-        # 1. Ujumbe kwenda kwa Mtumiaji Aliyelipa
-        if user_id != ADMIN_ID:
+        # 1. Ujumbe kwa Mtumiaji
+        if str(user_id) != str(ADMIN_ID):
             user_msg = (
                 f"🎉 **MALIPO YAMEPOKELEWA!**\n\n"
                 f"💰 **Kiasi:** TZS {amount}\n"
@@ -52,7 +50,7 @@ def sonicpesa_webhook():
             )
             requests.post(url, json={"chat_id": user_id, "text": user_msg, "parse_mode": "Markdown"})
 
-        # 2. Ujumbe kwenda kwa Admin
+        # 2. Ujumbe kwa Admin
         admin_msg = (
             f"✅ **MALIPO MPYA YAMEKAMILIKA!**\n\n"
             f"👤 **User ID:** `{user_id}`\n"
@@ -73,7 +71,7 @@ def run_flask():
 
 Thread(target=run_flask, daemon=True).start()
 
-# --- FUNCTION YA KUOMBA MALIPO SONICPESA ---
+# --- SONICPESA PAYMENT REQUEST ---
 def request_sonicpesa_payment(phone_number, amount):
     url = "https://sonicpesa.com/api/v1/checkout"
     headers = {
@@ -88,20 +86,29 @@ def request_sonicpesa_payment(phone_number, amount):
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=15)
-        return response.json()
+        print(f"📌 SonicPesa Status Code: {response.status_code}")
+        print(f"📌 SonicPesa Response: {response.text}")
+
+        if "application/json" in response.headers.get("Content-Type", ""):
+            return response.json()
+        else:
+            return {
+                "success": False, 
+                "error": f"API Error ({response.status_code}): Hakikisha SONICPESA_API_KEY iko sahihi kwenye Render."
+            }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# --- TELEGRAM COMMAND HANDLERS ---
+# --- TELEGRAM BOT COMMANDS ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    USER_IDS.add(user_id) # Hifadhi User ID kwa ajili ya kutuma matangazo
+    USER_IDS.add(user_id)
     
     await update.message.reply_text(
         "👋 **Karibu kwenye Kadomovie Bot!**\n\n"
         "🎬 **Tafuta Muvi:** Andika tu jina la muvi (Mfano: `Mjukuu` au `Babu`).\n"
-        "💳 **Lipia Huduma:** Andika `/lipa 07xxxxxxxx` ili kulipia TZS 1,000 tu kwa wiki.",
+        "💳 **Lipia Huduma:** Andika `/lipa 07xxxxxxxx` ili kulipia TZS 1,000 kwa wiki.",
         parse_mode="Markdown"
     )
 
@@ -119,13 +126,18 @@ async def lipa_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    phone = args[0].strip()
-    if phone.startswith("+255"):
-        phone = "0" + phone[4:]
-    elif phone.startswith("255"):
+    # Inasafisha namba na kuondoa nafasi au alama zozote zisizo namba
+    raw_phone = "".join(args)
+    phone = re.sub(r'\D', '', raw_phone)
+
+    if phone.startswith("255"):
         phone = "0" + phone[3:]
 
-    msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo kwenda `{phone}`... Subiri popup kwenye simu yako.", parse_mode="Markdown")
+    if len(phone) != 10:
+        await update.message.reply_text("❌ Namba sio sahihi. Hakikisha ina tarakimu 10 (Mfano: `/lipa 0747431855`).", parse_mode="Markdown")
+        return
+
+    msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo kwenda `{phone}`...", parse_mode="Markdown")
 
     res = request_sonicpesa_payment(phone, 1000)
 
@@ -137,12 +149,11 @@ async def lipa_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         err_msg = res.get("message") or res.get("error") or "Imeshindikana kutuma ombi la malipo."
         await msg.edit_text(f"❌ **Hitilafu:** {err_msg}")
 
-# --- COMMANDS ZA ADMIN (KUTUMA UJUMBE KWA USERS) ---
+# --- ADMIN COMMANDS ---
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin anatuma ujumbe kwa watumiaji WOTE: /broadcast Ujumbe wako hapa"""
     user_id = str(update.effective_user.id)
-    if user_id != ADMIN_ID:
+    if user_id != str(ADMIN_ID):
         await update.message.reply_text("❌ Huna ruhusa ya kutumia command hii.")
         return
 
@@ -158,21 +169,20 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=uid, text=f"📢 **TAARIFA:**\n\n{message_text}", parse_mode="Markdown")
             success_count += 1
-            await asyncio.sleep(0.1) # Kuzuia spam limit ya Telegram
+            await asyncio.sleep(0.1)
         except Exception:
             continue
 
     await update.message.reply_text(f"✅ Ujumbe umetumwa kikamilifu kwa watumiaji **{success_count}**!")
 
 async def send_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin anatuma ujumbe kwa user MMOJA: /send USER_ID Ujumbe wako"""
     user_id = str(update.effective_user.id)
-    if user_id != ADMIN_ID:
+    if user_id != str(ADMIN_ID):
         await update.message.reply_text("❌ Huna ruhusa ya kutumia command hii.")
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("⚠️ Tumia hivi: `/send 12345678 Ujumbe wako`", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Tumia hivi: `/send USER_ID Ujumbe wako`", parse_mode="Markdown")
         return
 
     target_id = context.args[0]
@@ -184,15 +194,15 @@ async def send_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Imeshindikana kutuma: {e}")
 
-# --- SEARCH FUNCTION (ABSALOM FAMILY SCRAPER) ---
+# --- MOVIE SEARCH HANDLER ---
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     USER_IDS.add(user.id)
     query = update.message.text.strip()
     
-    # Notify Admin wa anachotafuta user
-    if str(user.id) != ADMIN_ID:
+    # Mtaarifu Admin wakati mtumiaji anatafuta
+    if str(user.id) != str(ADMIN_ID):
         try:
             admin_msg = f"🔔 **Mtumiaji:** {user.first_name} (`{user.id}`)\n🔍 **Ametafuta:** `{query}`"
             await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="Markdown")
@@ -259,11 +269,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             continue
 
-# --- KUANZISHA BOT ---
+# --- START BOT ---
 if __name__ == '__main__':
     app_bot = ApplicationBuilder().token(TOKEN).build()
     
-    # Handlers
     app_bot.add_handler(CommandHandler(["start", "help"], start_command))
     app_bot.add_handler(CommandHandler("lipa", lipa_command))
     app_bot.add_handler(CommandHandler("broadcast", broadcast_command))
@@ -271,4 +280,3 @@ if __name__ == '__main__':
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     app_bot.run_polling()
-
