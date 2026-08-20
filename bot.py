@@ -74,13 +74,13 @@ Thread(target=run_flask, daemon=True).start()
 def request_sonicpesa_payment(phone_number, amount, user_id):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     
-    # Soma na usafishe API Key kuondoa spaces au alama za nukuu
+    # Soma na usafishe API Key
     raw_key = os.getenv("SONICPESA_API_KEY", "").strip().strip('"').strip("'")
     
     if not raw_key:
         return {
             "status": "error",
-            "message": "API Key haijapatikana! Hakikisha umeongeza Variable ya SONICPESA_API_KEY kwenye Render na ku-deploy."
+            "message": "API Key haijapatikana! Hakikisha SONICPESA_API_KEY imewekwa kwenye Render."
         }
 
     # Format ya namba 255...
@@ -92,8 +92,9 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
 
     ref_id = f"KADO{user_id}{int(time.time())}"
 
+    # Headers bila 'Bearer ' kuzuia Invalid Bearer Token Error
     headers = {
-        "Authorization": f"Bearer {raw_key}",
+        "Authorization": raw_key,
         "X-API-KEY": raw_key,
         "Content-Type": "application/json",
         "Accept": "application/json"
