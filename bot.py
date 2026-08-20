@@ -78,24 +78,23 @@ def request_sonicpesa_payment(phone_number, amount):
     raw_key = os.getenv("SONICPESA_API_KEY", "").strip()
     api_key = "sk_" + raw_key[3:] if raw_key.startswith("Sk_") else raw_key
 
-    # Badilisha namba kuwa format ya 255... kwa ajili ya M-Pesa / TigoPesa
+    # Format ya namba iwe 255...
     clean_phone = re.sub(r'\D', '', phone_number)
     if clean_phone.startswith("0"):
         clean_phone = "255" + clean_phone[1:]
     elif not clean_phone.startswith("255"):
         clean_phone = "255" + clean_phone
 
+    # Tumeondoa Authorization Bearer na kutumia x-api-key
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
     payload = {
         "api_key": api_key,
         "phone": clean_phone,
-        "msisdn": clean_phone,
-        "amount": int(amount),
-        "currency": "TZS"
+        "amount": int(amount)
     }
     
     try:
@@ -269,7 +268,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             p_res = requests.get(item['url'], headers=headers, timeout=12)
             p_soup = BeautifulSoup(p_res.text, 'html.parser')
 
-            # Usafishaji makini wa Google Drive links ili kuzuia link zilizoharibika
             raw_drive_links = re.findall(r'https://drive\.google\.com/file/d/[a-zA-Z0-9_-]+', p_res.text)
             if raw_drive_links:
                 drive_text = f"{raw_drive_links[0]}/view?usp=drivesdk"
@@ -303,3 +301,4 @@ if __name__ == '__main__':
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     app_bot.run_polling()
+
