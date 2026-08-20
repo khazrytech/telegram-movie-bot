@@ -39,7 +39,6 @@ def sonicpesa_webhook():
         user_id = PAYMENTS_DB.get(reference, ADMIN_ID)
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-        # 1. Ujumbe kwa Mtumiaji
         if str(user_id) != str(ADMIN_ID):
             user_msg = (
                 f"🎉 **MALIPO YAMEPOKELEWA!**\n\n"
@@ -49,7 +48,6 @@ def sonicpesa_webhook():
             )
             requests.post(url, json={"chat_id": user_id, "text": user_msg, "parse_mode": "Markdown"})
 
-        # 2. Ujumbe kwa Admin
         admin_msg = (
             f"✅ **MALIPO MPYA YAMEKAMILIKA!**\n\n"
             f"👤 **User ID:** `{user_id}`\n"
@@ -74,16 +72,17 @@ Thread(target=run_flask, daemon=True).start()
 def request_sonicpesa_payment(phone_number, amount, user_id):
     url = "https://api.sonicpesa.com/api/v1/payment/create_order"
     
-    # Soma na usafishe API Key
-    raw_key = os.getenv("SONICPESA_API_KEY", "").strip().strip('"').strip("'")
+    # Soma Key na Secret kutoka Render Environment
+    api_key = os.getenv("SONICPESA_API_KEY", "").strip().strip('"').strip("'")
+    api_secret = os.getenv("SONICPESA_API_SECRET", "").strip().strip('"').strip("'")
     
-    if not raw_key:
+    if not api_key or not api_secret:
         return {
             "status": "error",
-            "message": "API Key haijapatikana! Hakikisha SONICPESA_API_KEY imewekwa kwenye Render."
+            "message": "API Key au Secret haijapatikana! Hakikisha umeongeza SONICPESA_API_KEY na SONICPESA_API_SECRET kwenye Render."
         }
 
-    # Format ya namba 255...
+    # Format ya namba: Lazima ianze na 255
     clean_phone = re.sub(r'\D', '', str(phone_number))
     if clean_phone.startswith("0"):
         clean_phone = "255" + clean_phone[1:]
@@ -92,16 +91,15 @@ def request_sonicpesa_payment(phone_number, amount, user_id):
 
     ref_id = f"KADO{user_id}{int(time.time())}"
 
-    # Headers bila 'Bearer ' kuzuia Invalid Bearer Token Error
     headers = {
-        "Authorization": raw_key,
-        "X-API-KEY": raw_key,
+        "X-API-KEY": api_key,
+        "X-API-SECRET": api_secret,
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
     
     payload = {
-        "api_key": raw_key,
+        "api_key": api_key,
         "phone": clean_phone,
         "amount": int(amount),
         "reference": ref_id,
@@ -135,8 +133,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "👋 **Karibu kwenye Kadomovie Bot!**\n\n"
-        "🎬 **Tafuta Muvi:** Andika tu jina la muvi (Mfano: `Mjukuu` au `Babu`).\n"
-        "💳 **Lipia Huduma:** Andika `/lipa 07xxxxxxxx` ili kulipia TZS 1,000 kwa wiki.",
+        "🎬 **Tafuta Muvi:** Andika tu jina la muvi.\n"
+        "💳 **Lipia Huduma:** `/lipa 0747431855 1000`",
         parse_mode="Markdown"
     )
 
@@ -148,28 +146,37 @@ async def lipa_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         await update.message.reply_text(
             "💳 **Jinsi ya Kulipia Subscriptions:**\n"
-            "Andika: `/lipa 0712345678`\n\n"
-            "Gharama: **1,000 TZS** kwa wiki.",
+            "Andika: `/lipa 0747431855 1000`\n"
+            "(Namba ya simu kisha nafasi na kiasi)",
             parse_mode="Markdown"
         )
         return
 
-    raw_phone = "".join(args)
+    raw_phone = args[0]
+    amount = 1000 # Kiasi cha msingi
+    
+    if len(args) > 1:
+        try:
+            amount = int(args[1])
+        except ValueError:
+            amount = 1000
+
     phone = re.sub(r'\D', '', raw_phone)
 
+    # Lazima ianze na 255
     if phone.startswith("0"):
         phone = "255" + phone[1:]
     elif not phone.startswith("255"):
         phone = "255" + phone
 
     if len(phone) != 12:
-        await update.message.reply_text("❌ Namba sio sahihi. Hakikisha ina tarakimu sahihi (Mfano: `/lipa 0747431855`).", parse_mode="Markdown")
+        await update.message.reply_text("❌ Namba sio sahihi. Hakikisha ina tarakimu sahihi (Mfano: `/lipa 0747431855 1000`).", parse_mode="Markdown")
         return
 
-    msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo kwenda `0{phone[3:]}`...", parse_mode="Markdown")
+    msg = await update.message.reply_text(f"🔄 Inatuma ombi la malipo TZS {amount} kwenda `{phone}`...", parse_mode="Markdown")
 
     try:
-        res = await asyncio.to_thread(request_sonicpesa_payment, phone, 1000, user_id)
+        res = await asyncio.to_thread(request_sonicpesa_payment, phone, amount, user_id)
 
         if res.get("status") in ["success", True, 200] or "order_id" in str(res):
             data_obj = res.get("data", {}) if isinstance(res.get("data"), dict) else {}
@@ -316,3 +323,4 @@ if __name__ == '__main__':
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     app_bot.run_polling()
+
