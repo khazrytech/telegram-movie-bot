@@ -76,13 +76,11 @@ def request_sonicpesa_payment(phone_number, amount):
     
     # Inasoma key, inabadilisha 'Sk_' kuwa 'sk_', na kuondoa nafasi (space) zote
     raw_key = os.getenv("SONICPESA_API_KEY", "").strip()
-    if raw_key.startswith("Sk_"):
-        api_key = "sk_" + raw_key[3:]
-    else:
-        api_key = raw_key
+    api_key = "sk_" + raw_key[3:] if raw_key.startswith("Sk_") else raw_key
 
+    # Tumeondoa 'Authorization: Bearer' na kutumia 'x-api-key' badala yake
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
