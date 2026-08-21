@@ -8,8 +8,7 @@ import sqlite3
 import logging
 import asyncio
 from typing import Dict, Any, Optional
-from threading import Thread
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import requests
 from aiohttp import ClientSession, ClientTimeout
@@ -17,10 +16,9 @@ from flask import Flask, request, jsonify
 
 import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton, Update
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # ==========================================
 # 1. LOGGING & CONFIGURATION MANAGEMENT
@@ -40,6 +38,7 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 HF_KEY = os.getenv("HF_TOKEN")
 TMDB_KEY = os.getenv("TMDB_API_KEY")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "0")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # Render URL
 
 # ClickPesa Credentials
 CLICKPESA_API_KEY = os.getenv("CLICKPESA_API_KEY")
@@ -61,11 +60,9 @@ if not BOT_TOKEN:
 DB_FILE = "bot_database.db"
 
 def init_db():
-    """Inatengeneza majedwali ya Database kama hayapo."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Table ya Watumiaji
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -78,7 +75,6 @@ def init_db():
         )
     """)
     
-    # Table ya Miamala ya Malipo
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id TEXT PRIMARY KEY,
@@ -92,7 +88,6 @@ def init_db():
         )
     """)
     
-    # Table ya Logs za AI
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usage_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,7 +135,7 @@ def check_user_credits(user_id: int) -> int:
     conn.close()
     if result:
         if result["is_vip"] == 1:
-            return 999999 # VIP wana unlimited credits
+            return 999999
         return result["credits"]
     return 0
 
@@ -175,15 +170,13 @@ def add_user_credits(user_id: int, credits_to_add: int):
     conn.commit()
     conn.close()
 
-# Initialize DB on script load
 init_db()
 
 # ==========================================
-# 3. AI ENGINE INITIALIZATION
+# 3. AI ENGINE & BOT INITIALIZATION
 # ==========================================
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY.strip())
-    # GenerativeModel ya kisasa na yenye akili kubwa
     ai_model = genai.GenerativeModel('gemini-1.5-flash')
     logger.info("Gemini 1.5 Flash initialized successfully.")
 else:
@@ -193,7 +186,6 @@ else:
 bot = Bot(token=BOT_TOKEN.strip())
 dp = Dispatcher(storage=MemoryStorage())
 
-# Rate limiting dictionary {user_id: last_timestamp}
 RATE_LIMIT_STORE: Dict[int, float] = {}
 
 # ==========================================
@@ -214,7 +206,6 @@ class ClickPesaClient:
         }
 
     async def initiate_mobile_money_payment(self, phone: str, amount: float, reference: str) -> Dict[str, Any]:
-        """Inaanzisha ombi la malipo ya M-Pesa/TigoPesa/AirtelMoney kupitia ClickPesa API."""
         if not self.api_key:
             return {"success": False, "message": "ClickPesa API key missing."}
 
@@ -243,70 +234,9 @@ class ClickPesaClient:
 clickpesa_client = ClickPesaClient(CLICKPESA_API_KEY, CLICKPESA_CLIENT_ID, CLICKPESA_SECRET_KEY)
 
 # ==========================================
-# 5. FLASK WEB SERVER & WEBHOOKS
-# ==========================================
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return jsonify({
-        "status": "online",
-        "system": "Enterprise Telegram AI Bot",
-        "timestamp": datetime.now().isoformat()
-    }), 200
-
-@app.route('/health')
-def health_check():
-    return "OK", 200
-
-@app.route('/clickpesa-webhook', methods=['POST'])
-def clickpesa_webhook():
-    """Webhook inayopokea taarifa za malipo kutoka ClickPesa."""
-    data = request.json or {}
-    logger.info(f"Webhook Received: {json.dumps(data)}")
-    
-    # Process Webhook Payload
-    status = data.get("status")
-    reference = data.get("reference")
-    
-    if status == "SUCCESS" and reference:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, credits_added, status FROM transactions WHERE transaction_id = ?", (reference,))
-        tx = cursor.fetchone()
-        
-        if tx and tx["status"] != "SUCCESS":
-            user_id = tx["user_id"]
-            credits_to_add = tx["credits_added"]
-            
-            # Update Transaction Status
-            cursor.execute("UPDATE transactions SET status = 'SUCCESS' WHERE transaction_id = ?", (reference,))
-            cursor.execute("UPDATE users SET credits = credits + ? WHERE user_id = ?", (credits_to_add, user_id))
-            conn.commit()
-            
-            # Notify User asynchronously via Telegram Event Loop
-            asyncio.run_coroutine_threadsafe(
-                bot.send_message(
-                    chat_id=user_id,
-                    text=f"🎉 **Malipo Yamefanikiwa!**\n\nCredit **+{credits_to_add}** zimeongezwa kwenye akaunti yako. Tumia `/profile` kuangalia salio lako.",
-                    parse_mode="Markdown"
-                ),
-                bot_loop
-            )
-            logger.info(f"Payment reference {reference} successfully processed.")
-        conn.close()
-
-    return jsonify({"status": "acknowledged"}), 200
-
-def run_flask_server():
-    port = int(os.getenv("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-# ==========================================
-# 6. EXTERNAL APIS (TMDB & HUGGINGFACE)
+# 5. EXTERNAL APIS (TMDB & HUGGINGFACE)
 # ==========================================
 async def search_movie_tmdb(query: str) -> Dict[str, Any]:
-    """Inatafuta muvi kupitia TMDB API."""
     if not TMDB_KEY:
         return {"success": False, "message": "TMDB API Key haijawekwa."}
         
@@ -326,7 +256,6 @@ async def search_movie_tmdb(query: str) -> Dict[str, Any]:
         return {"success": False, "message": "Imeshindikana kuunganisha na server ya Muvi."}
 
 async def generate_flux_image(prompt: str) -> Optional[bytes]:
-    """Inatengeneza picha kwa kutumia FLUX.1/SDXL Model kupitia HuggingFace."""
     if not HF_KEY:
         return None
         
@@ -351,10 +280,9 @@ async def generate_flux_image(prompt: str) -> Optional[bytes]:
     return None
 
 # ==========================================
-# 7. TELEGRAM BOT HANDLERS & MIDDLEWARES
+# 6. TELEGRAM BOT HANDLERS
 # ==========================================
 
-# Rate Limiter Function
 def is_rate_limited(user_id: int, limit_seconds: int = 3) -> bool:
     now = time.time()
     last_time = RATE_LIMIT_STORE.get(user_id, 0)
@@ -363,7 +291,6 @@ def is_rate_limited(user_id: int, limit_seconds: int = 3) -> bool:
     RATE_LIMIT_STORE[user_id] = now
     return False
 
-# /start Command
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user = message.from_user
@@ -387,7 +314,6 @@ async def cmd_start(message: types.Message):
     
     await message.reply(welcome_card, parse_mode="Markdown", reply_markup=keyboard)
 
-# /profile Command
 @dp.message(Command("profile"))
 async def cmd_profile(message: types.Message):
     user_id = message.from_user.id
@@ -404,7 +330,6 @@ async def cmd_profile(message: types.Message):
     )
     await message.reply(profile_text, parse_mode="Markdown")
 
-# /buy Command
 @dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
     buy_text = (
@@ -423,7 +348,6 @@ async def cmd_buy(message: types.Message):
     
     await message.reply(buy_text, parse_mode="Markdown", reply_markup=keyboard)
 
-# Callback Query Handler for Payment Selection
 @dp.callback_query(F.data.startswith("pay_"))
 async def process_payment_callback(callback: types.CallbackQuery):
     await callback.answer()
@@ -442,7 +366,6 @@ async def process_payment_callback(callback: types.CallbackQuery):
         parse_mode="Markdown"
     )
 
-# /lipa Command Handler (ClickPesa Integration)
 @dp.message(Command("lipa"))
 async def cmd_lipa(message: types.Message, command: CommandObject):
     if not command.args:
@@ -456,7 +379,6 @@ async def cmd_lipa(message: types.Message, command: CommandObject):
 
     phone, amount_str = args[0], args[1]
     
-    # Format Phone Number
     clean_phone = re.sub(r"[^0-9]", "", phone)
     if clean_phone.startswith("0"):
         clean_phone = "255" + clean_phone[1:]
@@ -474,11 +396,9 @@ async def cmd_lipa(message: types.Message, command: CommandObject):
         await message.reply("❌ Kiasi lazima kiwe namba.")
         return
 
-    # Calculate Credits
-    credits_to_add = int(amount / 20) # TZS 1000 = 50 Credits
+    credits_to_add = int(amount / 20)
     reference = f"TX-{message.from_user.id}-{int(time.time())}"
 
-    # Save Pending Transaction to Database
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -490,7 +410,6 @@ async def cmd_lipa(message: types.Message, command: CommandObject):
 
     status_msg = await message.reply("⏳ Inatuma ombi la malipo kwenda ClickPesa/Simu yako...")
 
-    # Call ClickPesa API
     response = await clickpesa_client.initiate_mobile_money_payment(clean_phone, amount, reference)
     
     if response["success"]:
@@ -505,7 +424,6 @@ async def cmd_lipa(message: types.Message, command: CommandObject):
     else:
         await status_msg.edit_text(f"❌ Imeshindikana kuomba malipo: {response['message']}")
 
-# /movie Command Handler (TMDB Integration)
 @dp.message(Command("movie"))
 async def cmd_movie(message: types.Message, command: CommandObject):
     if not command.args:
@@ -541,7 +459,6 @@ async def cmd_movie(message: types.Message, command: CommandObject):
     else:
         await status_msg.edit_text(caption, parse_mode="Markdown")
 
-# /generate Command Handler (Hugging Face Image Generation)
 @dp.message(Command("generate"))
 async def cmd_generate(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -566,11 +483,9 @@ async def cmd_generate(message: types.Message, command: CommandObject):
         await message.reply_photo(photo=photo, caption=f"🎨 **Prompt:** {prompt}\n⚡ *Credits Remaining: {check_user_credits(user_id)}*", parse_mode="Markdown")
         await status_msg.delete()
     else:
-        # Refund credits on failure
         add_user_credits(user_id, 2)
         await status_msg.edit_text("❌ Imeshindikana kutengeneza picha. Server zipo busy, jaribu tena baadae (Credit zako zimerudishwa).")
 
-# Admin Broadcast & Management Commands
 @dp.message(Command("admin"))
 async def cmd_admin(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -628,13 +543,12 @@ async def cmd_broadcast(message: types.Message, command: CommandObject):
         try:
             await bot.send_message(u["user_id"], f"📢 **TANGAZO:**\n\n{text}", parse_mode="Markdown")
             count += 1
-            await asyncio.sleep(0.05) # Rate limit protection
+            await asyncio.sleep(0.05)
         except Exception:
             continue
             
     await message.reply(f"✅ Tangazo limetumwa kwa watumiaji {count}.")
 
-# Main Smart AI Chat & Coding Handler (Gemini AI)
 @dp.message(F.text & ~F.text.startswith('/'))
 async def ai_chat_handler(message: types.Message):
     user_id = message.from_user.id
@@ -647,7 +561,6 @@ async def ai_chat_handler(message: types.Message):
         await message.reply("❌ Mfumo wa AI haujakamilika: `GEMINI_API_KEY` haijowekwa.")
         return
 
-    # Check Credit
     if not deduct_user_credit(user_id, amount=1):
         await message.reply("❌ Credit zako zimeisha! Tumia `/buy` au `/profile` kuongeza salio la kutumia AI.")
         return
@@ -655,7 +568,6 @@ async def ai_chat_handler(message: types.Message):
     thinking_msg = await message.reply("🤔 *AI inafikiria na kuandika jibu...*", parse_mode="Markdown")
 
     try:
-        # Prompt Context Enrichment
         system_prompt = (
             "Wewe ni AI assistant mwenye akili sana na mtaalamu wa software engineering na uandishi wa kodi. "
             "Unajibu kwa kiswahili fasaha na kutoa kodi safi zenye maelezo kamili. "
@@ -665,7 +577,6 @@ async def ai_chat_handler(message: types.Message):
         response = await asyncio.to_thread(ai_model.generate_content, system_prompt)
         reply_text = response.text if response.text else "⚠️ AI haijatoa jibu."
 
-        # Handle Telegram Message Length Limit (4096 Characters)
         if len(reply_text) > 4000:
             await thinking_msg.delete()
             chunks = [reply_text[i:i+4000] for i in range(0, len(reply_text), 4000)]
@@ -676,31 +587,86 @@ async def ai_chat_handler(message: types.Message):
 
     except Exception as e:
         logger.error(f"Gemini Execution Error: {e}")
-        # Refund Credit on Exception
         add_user_credits(user_id, 1)
         await thinking_msg.edit_text("❌ Kutokana na tatizo la mtandao, jibu halijapatikana. Credit yako imerudishwa.")
 
 # ==========================================
-# 8. SYSTEM LAUNCHER & LIFECYCLE MANAGEMENT
+# 7. FLASK WEB SERVER & WEBHOOK INTEGRATION
 # ==========================================
-bot_loop = None
+app = Flask(__name__)
 
-async def main():
-    global bot_loop
-    bot_loop = asyncio.get_running_loop()
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 
-    # Start Flask Web Server in Background Thread
-    server_thread = Thread(target=run_flask_server, daemon=True)
-    server_thread.start()
-    logger.info("Background Flask Web Server initialized on port 8080.")
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "online",
+        "system": "Enterprise Telegram AI Bot (Webhook Mode)",
+        "timestamp": datetime.now().isoformat()
+    }), 200
 
-    # Drop Pending Updates & Start Polling
-    await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Starting Telegram Bot Polling Engine...")
-    await dp.start_polling(bot)
+@app.route('/health')
+def health_check():
+    return "OK", 200
+
+@app.route(WEBHOOK_PATH, methods=['POST'])
+def telegram_webhook():
+    """Inapokea maombi kutoka Telegram."""
+    try:
+        update = Update.model_validate(request.get_json(force=True), context={"bot": bot})
+        asyncio.run(dp.feed_update(bot, update))
+        return "OK", 200
+    except Exception as e:
+        logger.error(f"Error handling update: {e}")
+        return "Error", 500
+
+@app.route('/clickpesa-webhook', methods=['POST'])
+def clickpesa_webhook():
+    data = request.json or {}
+    logger.info(f"Webhook Received: {json.dumps(data)}")
+    
+    status = data.get("status")
+    reference = data.get("reference")
+    
+    if status == "SUCCESS" and reference:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, credits_added, status FROM transactions WHERE transaction_id = ?", (reference,))
+        tx = cursor.fetchone()
+        
+        if tx and tx["status"] != "SUCCESS":
+            user_id = tx["user_id"]
+            credits_to_add = tx["credits_added"]
+            
+            cursor.execute("UPDATE transactions SET status = 'SUCCESS' WHERE transaction_id = ?", (reference,))
+            cursor.execute("UPDATE users SET credits = credits + ? WHERE user_id = ?", (credits_to_add, user_id))
+            conn.commit()
+            
+            asyncio.run(
+                bot.send_message(
+                    chat_id=user_id,
+                    text=f"🎉 **Malipo Yamefanikiwa!**\n\nCredit **+{credits_to_add}** zimeongezwa kwenye akaunti yako. Tumia `/profile` kuangalia salio lako.",
+                    parse_mode="Markdown"
+                )
+            )
+            logger.info(f"Payment reference {reference} successfully processed.")
+        conn.close()
+
+    return jsonify({"status": "acknowledged"}), 200
+
+# Set Webhook automatically on startup
+async def set_webhook():
+    if RENDER_EXTERNAL_URL:
+        webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}{WEBHOOK_PATH}"
+        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        logger.info(f"Webhook successfully set to {webhook_url}")
+    else:
+        logger.warning("RENDER_EXTERNAL_URL environment variable is missing!")
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Application Shutdown complete.")
+    # Initialize Webhook before starting Flask
+    asyncio.run(set_webhook())
+    
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
